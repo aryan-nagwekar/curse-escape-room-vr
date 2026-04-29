@@ -121,7 +121,7 @@ canvas{display:block;position:fixed;inset:0;}
   </div>
 </div>
 
-<div id="hud">DESKTOP: WASD · CLICK · E DROP · G SKIP | VR: TRIGGER INTERACT/DRAG · GRIP SPAWN · E/SQUEEZE DROP RELIC</div>
+<div id="hud">DESKTOP: WASD · CLICK · E DROP · G SKIP | VR EMULATOR: WASD MOVE · TRIGGER INTERACT/DRAG · GRIP SPAWN</div>
 <div id="ch"></div>
 <div id="hint"></div>
 <div id="blood"></div>
@@ -185,8 +185,10 @@ const scene=new THREE.Scene();
 scene.fog=new THREE.FogExp2(0x060100,.048);
 scene.background=new THREE.Color(0x060100);
 
+const playerRig=new THREE.Group();
+scene.add(playerRig);
 const cam=new THREE.PerspectiveCamera(72,window.innerWidth/window.innerHeight,.05,180);
-cam.position.set(0,1.65,4.0); scene.add(cam);
+cam.position.set(0,1.65,4.0); playerRig.add(cam);
 
 // ══════════════════════════════════════════════════════════════
 //  SHORT-HANDS
@@ -1994,7 +1996,7 @@ function setupController(idx){
   controller.addEventListener('selectstart',()=>handleControllerSelect(controller));
   controller.addEventListener('selectend',()=>handleControllerSelectEnd(controller));
   controller.addEventListener('squeezestart',()=>handleControllerSqueeze(controller));
-  scene.add(controller);
+  playerRig.add(controller);
   controllers.push(controller);
 }
 
@@ -2004,6 +2006,39 @@ function setVrRayFromController(controller){
   vrRay.ray.origin.setFromMatrixPosition(controller.matrixWorld);
   vrRay.ray.direction.set(0,0,-1).applyMatrix4(vrRayMatrix).normalize();
   vrRayOrigin.copy(vrRay.ray.origin);
+}
+
+const playerWorldPos=new THREE.Vector3();
+function getPlayerWorldPosition(){
+  cam.getWorldPosition(playerWorldPos);
+  return playerWorldPos;
+}
+
+function translatePlayerWorld(dx,dz){
+  if(renderer.xr.isPresenting){
+    playerRig.position.x+=dx;
+    playerRig.position.z+=dz;
+  } else {
+    cam.position.x+=dx;
+    cam.position.z+=dz;
+  }
+}
+
+function setPlayerWorldXZ(x,z){
+  const p=getPlayerWorldPosition();
+  translatePlayerWorld(x-p.x,z-p.z);
+  if(!renderer.xr.isPresenting)cam.position.y=1.65;
+}
+
+function clampPlayerToBounds(){
+  const p=getPlayerWorldPosition();
+  const inExterior=KP.unlocked&&p.z<CZ2-5.4;
+  const xLimit=inExterior?42:4.7;
+  const zMin=KP.unlocked ? exitZ-62 : (S.corridorUnlocked ? -RD/2-CD-.5 : -6.7);
+  const nx=Math.max(-xLimit,Math.min(xLimit,p.x));
+  const nz=Math.max(zMin,Math.min(5.0,p.z));
+  if(nx!==p.x||nz!==p.z)setPlayerWorldXZ(nx,nz);
+  if(!renderer.xr.isPresenting)cam.position.y=1.65;
 }
 
 function handleControllerSelect(controller){
@@ -2083,15 +2118,9 @@ function teleportFromController(controller){
   const hits=vrRay.intersectObjects(activeFloors,false);
   if(!hits.length)return false;
   const p=hits[0].point;
-  const inExterior=KP.unlocked&&p.z<CZ2-5.4;
-  const xLimit=inExterior?42:4.7;
-  const zMin=KP.unlocked ? exitZ-62 : (S.corridorUnlocked ? -RD/2-CD-.5 : -6.7);
-  cam.position.set(
-    Math.max(-xLimit,Math.min(xLimit,p.x)),
-    1.65,
-    Math.max(zMin,Math.min(5.0,p.z))
-  );
-  if(KP.unlocked&&cam.position.z<exitZ-.7)beginOutsideFinale();
+  setPlayerWorldXZ(p.x,p.z);
+  clampPlayerToBounds();
+  if(KP.unlocked&&getPlayerWorldPosition().z<exitZ-.7)beginOutsideFinale();
   showHint('Teleported.');
   return true;
 }
@@ -2630,6 +2659,27 @@ function triggerTimeUp(){
 const clock=new THREE.Clock();let t=0,loopStarted=false;
 const _fwd=new THREE.Vector3(),_rgt=new THREE.Vector3(),_dir=new THREE.Vector3(),_off=new THREE.Vector3(),_heldQuat=new THREE.Quaternion();
 
+function readXrMoveAxes(){
+  let strafe=0,forward=0;
+  const session=renderer.xr.getSession?.();
+  if(!session)return {strafe,forward};
+  for(const src of session.inputSources){
+    const axes=src.gamepad?.axes||[];
+    let ax=0,ay=0;
+    if(Math.abs(axes[2]||0)>.15||Math.abs(axes[3]||0)>.15){
+      ax=axes[2]||0;ay=axes[3]||0;
+    } else if(Math.abs(axes[0]||0)>.15||Math.abs(axes[1]||0)>.15){
+      ax=axes[0]||0;ay=axes[1]||0;
+    }
+    if(Math.abs(ax)>.15)strafe+=ax;
+    if(Math.abs(ay)>.15)forward+=-ay;
+  }
+  return {
+    strafe:Math.max(-1,Math.min(1,strafe)),
+    forward:Math.max(-1,Math.min(1,forward))
+  };
+}
+
 function startRenderLoop(){
   if(loopStarted)return;
   loopStarted=true;
@@ -2643,24 +2693,34 @@ function animate(){
     cam.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,'YXZ'));
   }
 
-  _fwd.set(-Math.sin(yaw),0,-Math.cos(yaw));
-  _rgt.set(Math.cos(yaw),0,-Math.sin(yaw));
+  let forwardInput=0,strafeInput=0;
+  if(keys.KeyW||keys.ArrowUp)forwardInput+=1;
+  if(keys.KeyS||keys.ArrowDown)forwardInput-=1;
+  if(keys.KeyA||keys.ArrowLeft)strafeInput-=1;
+  if(keys.KeyD||keys.ArrowRight)strafeInput+=1;
+  if(renderer.xr.isPresenting){
+    const axes=readXrMoveAxes();
+    forwardInput+=axes.forward;
+    strafeInput+=axes.strafe;
+    renderer.xr.getCamera(cam).getWorldDirection(_fwd);
+    _fwd.y=0;
+    if(_fwd.lengthSq()<.001)_fwd.set(0,0,-1);
+    else _fwd.normalize();
+    _rgt.set(-_fwd.z,0,_fwd.x).normalize();
+  } else {
+    _fwd.set(-Math.sin(yaw),0,-Math.cos(yaw));
+    _rgt.set(Math.cos(yaw),0,-Math.sin(yaw));
+  }
   _dir.set(0,0,0);
-  if(keys.KeyW||keys.ArrowUp)   _dir.addScaledVector(_fwd,1);
-  if(keys.KeyS||keys.ArrowDown) _dir.addScaledVector(_fwd,-1);
-  if(keys.KeyA||keys.ArrowLeft) _dir.addScaledVector(_rgt,-1);
-  if(keys.KeyD||keys.ArrowRight)_dir.addScaledVector(_rgt,1);
+  _dir.addScaledVector(_fwd,forwardInput);
+  _dir.addScaledVector(_rgt,strafeInput);
   const moving=_dir.lengthSq()>0;
   if(moving){
-    _dir.normalize();cam.position.addScaledVector(_dir,3.5*dt);
-    const inExterior=KP.unlocked&&cam.position.z<CZ2-5.4;
-    const xLimit=inExterior?42:4.7;
-    cam.position.x=Math.max(-xLimit,Math.min(xLimit,cam.position.x));
-    const zMin=KP.unlocked ? exitZ-62 : (S.corridorUnlocked ? -RD/2-CD-.5 : -6.7);
-    cam.position.z=Math.max(zMin,Math.min(5.0,cam.position.z));
-    cam.position.y=1.65;
+    _dir.normalize();
+    translatePlayerWorld(_dir.x*3.5*dt,_dir.z*3.5*dt);
+    clampPlayerToBounds();
   }
-  if(KP.unlocked&&cam.position.z<exitZ-.7)beginOutsideFinale();
+  if(KP.unlocked&&getPlayerWorldPosition().z<exitZ-.7)beginOutsideFinale();
 
   // Held relic floats in front — right hand position
   if(S.held){
@@ -2793,7 +2853,7 @@ async function enterVR(){
       heldByController=null;
     });
     renderer.xr.setSession(session);
-    showHint('VR mode ready. Trigger interacts/drags. Grip spawns a cube where you point.');
+    showHint('VR mode ready. Use WASD to move in the emulator. Trigger interacts or teleports on floor. Grip spawns cubes.');
   }catch(err){
     vrBtn.textContent='ENTER VR';
     showHint('VR session could not start. On laptop, make the emulator active and press its play button after entering VR.');
