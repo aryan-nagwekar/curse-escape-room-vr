@@ -597,6 +597,13 @@ kpGlow.position.set(door2OpenW/2-.32,1.5,.35);door2Panel.add(kpGlow);
 // Physical keypad buttons for Quest/WebXR. These sit in the scene so
 // controller rays can enter the passcode without relying on a DOM overlay.
 const kpButtonMeshes=[];
+const KP_GRID_KEYS=[
+  ['1','2','3'],['4','5','6'],['7','8','9'],['✕','0','↵']
+];
+const KP_CENTER_X=door2OpenW/2-.32;
+const KP_TOP_Y=1.49;
+const KP_CELL_W=.116;
+const KP_CELL_H=.102;
 function makeKpButtonLabel(k){
   return mkc(96,96,(ctx,w,h)=>{
     ctx.clearRect(0,0,w,h);
@@ -612,24 +619,22 @@ function makeKpButtonLabel(k){
     ctx.fillText(String(k),w/2,h/2+2);
   });
 }
-[
-  ['1','2','3'],['4','5','6'],['7','8','9'],['X','0','OK']
-].forEach((row,ri)=>{
+KP_GRID_KEYS.forEach((row,ri)=>{
   row.forEach((k,ci)=>{
-    const realKey=k==='X'?'✕':k==='OK'?'↵':k;
+    const labelKey=k==='✕'?'X':k==='↵'?'OK':k;
     const btn=BX(.085,.065,.055,LB({color:0x071007,emissive:new THREE.Color(.005,.03,.01)}));
-    btn.position.set(door2OpenW/2-.32+(ci-1)*.116,1.49-ri*.102,.225);
+    btn.position.set(KP_CENTER_X+(ci-1)*KP_CELL_W,KP_TOP_Y-ri*KP_CELL_H,.225);
     btn.userData.isVrKpButton=true;
-    btn.userData.kpKey=realKey;
+    btn.userData.kpKey=k;
     btn.userData.baseZ=btn.position.z;
     door2Panel.add(btn);
     const label=new THREE.Mesh(
       new THREE.PlaneGeometry(.072,.054),
-      BA({map:makeKpButtonLabel(k),transparent:true,depthWrite:false})
+      BA({map:makeKpButtonLabel(labelKey),transparent:true,depthWrite:false})
     );
     label.position.set(0,0,.032);
     label.userData.isVrKpButton=true;
-    label.userData.kpKey=realKey;
+    label.userData.kpKey=k;
     btn.add(label);
     kpButtonMeshes.push(btn,label);
   });
@@ -890,6 +895,9 @@ function updateKpDisplay(){
   d.textContent=(KP.entered+'____').slice(0,4).split('').map((c,i)=>i<KP.entered.length?c:'_').join('');
   updateWorldKpLeds();
 }
+function kpEnteredLabel(){
+  return (KP.entered+'____').slice(0,4).split('').map((c,i)=>i<KP.entered.length?c:'_').join(' ');
+}
 function pressKpKey(k){
   if(KP.unlocked)return;
   const btn=kpButtonMeshes.find(b=>b.userData.kpKey===k&&b.userData.baseZ!==undefined);
@@ -897,10 +905,15 @@ function pressKpKey(k){
     btn.position.z=btn.userData.baseZ-.025;
     setTimeout(()=>{btn.position.z=btn.userData.baseZ;},120);
   }
-  if(k==='✕'){KP.entered='';updateKpDisplay();return;}
+  if(k==='✕'){
+    KP.entered='';updateKpDisplay();
+    showXrMessage('CODE: _ _ _ _');
+    return;
+  }
   if(k==='↵'){submitCode();return;}
   if(/^[0-9]$/.test(k)&&KP.entered.length<4){
     KP.entered+=k;updateKpDisplay();
+    showXrMessage('CODE: '+kpEnteredLabel());
     playChime();
   }
 }
@@ -913,6 +926,7 @@ function submitCode(){
     err.textContent='✗  INCORRECT CODE';KP.entered='';updateKpDisplay();
     kpLedMeshes.forEach(led=>led.material.color.setHex(0xaa0000));
     setTimeout(updateWorldKpLeds,450);
+    showHint('Incorrect code. Enter the four wall digits in order.');
     // Flash red
     kpOverlay.style.background='rgba(80,0,0,.9)';
     setTimeout(()=>{kpOverlay.style.background='rgba(0,0,0,.88)';err.textContent='';},800);
@@ -1827,8 +1841,38 @@ function interactables(){
   altar.traverse(c=>{if(c.userData.isSlot)list.push(c);});
   list.push(altarTopMesh);
   spawnedObjects.forEach(o=>{if(o.parent)list.push(o);});
-  if(S.won&&!KP.unlocked)list.push(kpHitMesh,...kpButtonMeshes);
+  if(S.won&&!KP.unlocked)list.push(...kpButtonMeshes,kpHitMesh);
   return list;
+}
+
+function keyFromKeypadLocalPoint(localPoint){
+  const col=Math.floor((localPoint.x-(KP_CENTER_X-KP_CELL_W*1.5))/KP_CELL_W);
+  const row=Math.floor((KP_TOP_Y+KP_CELL_H*.5-localPoint.y)/KP_CELL_H);
+  if(row<0||row>=KP_GRID_KEYS.length||col<0||col>=3)return null;
+  return KP_GRID_KEYS[row][col];
+}
+
+function interactWithHit(hit,sourceController=null){
+  const kpBtn=ancWith(hit.object,'isVrKpButton');
+  if(kpBtn){
+    pressKpKey(kpBtn.userData.kpKey);
+    return true;
+  }
+  if(hit.object.userData.isKeypad||ancWith(hit.object,'isKeypad')){
+    if(renderer.xr.isPresenting){
+      const local=door2Panel.worldToLocal(hit.point.clone());
+      const key=keyFromKeypadLocalPoint(local);
+      if(key){
+        pressKpKey(key);
+        return true;
+      }
+      showHint('Aim at the keypad digit grid and pull the trigger.');
+      return true;
+    }
+    openKp();
+    return true;
+  }
+  return interactWithObject(hit.object,sourceController);
 }
 
 function interactWithObject(obj,sourceController=null){
@@ -1837,11 +1881,6 @@ function interactWithObject(obj,sourceController=null){
     spawned.material.emissive?.setHex(0x0000ff);
     sourceController.attach(spawned);
     sourceController.userData.selectedSpawn=spawned;
-    return true;
-  }
-  const kpBtn=ancWith(obj,'isVrKpButton');
-  if(kpBtn){
-    pressKpKey(kpBtn.userData.kpKey);
     return true;
   }
   if(hasAnc(obj,'isChestKey')){pickUpChestKey();return true;}
@@ -1932,7 +1971,7 @@ function handleClick(){
 
   // ── PICKUP / OPEN containers ───────────────────────────────
   if(hits.length){
-    if(interactWithObject(hits[0].object))return;
+    if(interactWithHit(hits[0]))return;
   }
 
   // ── PROXIMITY FALLBACK — if hand ray missed but relic is close ─
@@ -1965,6 +2004,11 @@ renderer.domElement.addEventListener('click',e=>{
 });
 document.addEventListener('keydown',e=>{
   if(!started||KP.active)return;
+  if(renderer.xr.isPresenting&&S.won&&!KP.unlocked){
+    if(e.key>='0'&&e.key<='9'){pressKpKey(e.key);return;}
+    if(e.key==='Backspace'){pressKpKey('✕');return;}
+    if(e.key==='Enter'){pressKpKey('↵');return;}
+  }
   if(e.code==='KeyE'&&S.held)dropRelic();
   if(e.code==='KeyG')godMode();
   if(e.code==='Space'||e.code==='KeyF')handleClick();
@@ -2052,7 +2096,7 @@ function handleControllerSelect(controller){
     return;
   }
   const hits=vrRay.intersectObjects(interactables(),true);
-  if(hits.length&&interactWithObject(hits[0].object,controller))return;
+  if(hits.length&&interactWithHit(hits[0],controller))return;
 
   const reach=.75;
   if(chestKey.visible&&vrRayOrigin.distanceTo(chestKey.position)<reach){pickUpChestKey();return;}
