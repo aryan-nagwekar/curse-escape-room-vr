@@ -29,7 +29,6 @@ canvas{display:block;position:fixed;inset:0;}
   text-transform:uppercase;transition:all .3s;}
 #enter:hover,#vrBtn:hover{border-color:#c8a96e;color:#ffd060;box-shadow:0 0 25px rgba(180,60,0,.5);}
 #vrBtn{background:rgba(30,9,0,.5);}
-#vrBtn:disabled{opacity:.42;cursor:not-allowed;box-shadow:none;}
 @keyframes flk{0%,18%,20%,52%,54%,100%{opacity:1;}19%,53%{opacity:.45;}}
 
 /* HUD */
@@ -122,7 +121,7 @@ canvas{display:block;position:fixed;inset:0;}
   </div>
 </div>
 
-<div id="hud">DESKTOP: WASD · CLICK · E DROP · G SKIP | QUEST: TRIGGER INTERACT · SQUEEZE DROP/TELEPORT</div>
+<div id="hud">DESKTOP: WASD · CLICK · E DROP · G SKIP | VR: TRIGGER INTERACT/DRAG · GRIP SPAWN · E/SQUEEZE DROP RELIC</div>
 <div id="ch"></div>
 <div id="hint"></div>
 <div id="blood"></div>
@@ -1825,11 +1824,19 @@ function interactables(){
   if(!S.bookPulled)hiddenBook.traverse(c=>{if(c.isMesh)list.push(c);});
   altar.traverse(c=>{if(c.userData.isSlot)list.push(c);});
   list.push(altarTopMesh);
+  spawnedObjects.forEach(o=>{if(o.parent)list.push(o);});
   if(S.won&&!KP.unlocked)list.push(kpHitMesh,...kpButtonMeshes);
   return list;
 }
 
 function interactWithObject(obj,sourceController=null){
+  const spawned=ancWith(obj,'isSpawned');
+  if(spawned&&sourceController){
+    spawned.material.emissive?.setHex(0x0000ff);
+    sourceController.attach(spawned);
+    sourceController.userData.selectedSpawn=spawned;
+    return true;
+  }
   const kpBtn=ancWith(obj,'isVrKpButton');
   if(kpBtn){
     pressKpKey(kpBtn.userData.kpKey);
@@ -1966,6 +1973,7 @@ document.addEventListener('keydown',e=>{
 // ══════════════════════════════════════════════════════════════
 const floorTargets=[floorMesh,corrFloor,vFloor,desert];
 const controllers=[];
+const spawnedObjects=[];
 
 function makeControllerRay(){
   const geo=new THREE.BufferGeometry().setFromPoints([
@@ -1984,6 +1992,7 @@ function setupController(idx){
   controller.userData.index=idx;
   controller.add(makeControllerRay());
   controller.addEventListener('selectstart',()=>handleControllerSelect(controller));
+  controller.addEventListener('selectend',()=>handleControllerSelectEnd(controller));
   controller.addEventListener('squeezestart',()=>handleControllerSqueeze(controller));
   scene.add(controller);
   controllers.push(controller);
@@ -2018,15 +2027,54 @@ function handleControllerSelect(controller){
       pickUp(r);heldByController=controller;return;
     }
   }
+  if(teleportFromController(controller))return;
   showHint('Aim the controller ray at a glowing object, puzzle lock, altar socket, or keypad button.');
+}
+
+function handleControllerSelectEnd(controller){
+  if(controller.userData.selectedSpawn){
+    const obj=controller.userData.selectedSpawn;
+    obj.material.emissive?.setHex(0x000000);
+    scene.attach(obj);
+    controller.userData.selectedSpawn=null;
+  }
 }
 
 function handleControllerSqueeze(controller){
   if(!started)return;
   if(S.held){dropRelic();return;}
-  if(!teleportFromController(controller)){
-    showHint('Aim at the floor and squeeze to teleport.');
+  spawnObjectFromController(controller);
+}
+
+function spawnObjectFromController(controller){
+  setVrRayFromController(controller);
+  const activeFloors=floorTargets.filter(f=>f&&(f!==desert||exterior.visible));
+  const hits=vrRay.intersectObjects(activeFloors,false);
+  const spawnPoint=new THREE.Vector3();
+  if(hits.length){
+    spawnPoint.copy(hits[0].point);
+    spawnPoint.y+=.12;
+  } else {
+    spawnPoint.copy(vrRay.ray.direction).multiplyScalar(3).add(vrRay.ray.origin);
   }
+  const mat=LB({
+    color:new THREE.Color().setHSL(Math.random(),.72,.55),
+    emissive:new THREE.Color(.05,.02,.01)
+  });
+  const obj=BX(.22,.22,.22,mat);
+  obj.position.copy(spawnPoint);
+  obj.rotation.set(Math.random()*Math.PI,Math.random()*Math.PI,Math.random()*Math.PI);
+  obj.userData.isSpawned=true;
+  scene.add(obj);
+  spawnedObjects.push(obj);
+  if(spawnedObjects.length>28){
+    const old=spawnedObjects.shift();
+    old.parent?.remove(old);
+    old.geometry?.dispose?.();
+    old.material?.dispose?.();
+  }
+  showHint('Grip spawned a new object at your controller ray.');
+  return obj;
 }
 
 function teleportFromController(controller){
@@ -2727,12 +2775,12 @@ async function enterVR(){
   const vrBtn=document.getElementById('vrBtn');
   try{
     if(!navigator.xr){
-      showHint('WebXR is not available in this browser. Open this page in Meta Quest Browser.');
+      showHint('Laptop VR needs the Immersive Web Emulator. Toggle the emulator icon green, reload this page, then click ENTER VR again.');
       return;
     }
     const supported=await navigator.xr.isSessionSupported('immersive-vr');
     if(!supported){
-      showHint('Immersive VR is not available here. Try Meta Quest Browser or the Immersive Web Emulator.');
+      showHint('Immersive VR is not active. On laptop, turn the WebXR Emulator icon green and reload; on Quest, open in Meta Quest Browser.');
       return;
     }
     startGame({vr:true});
@@ -2745,21 +2793,15 @@ async function enterVR(){
       heldByController=null;
     });
     renderer.xr.setSession(session);
-    showHint('Quest mode ready. Use trigger to interact and squeeze to drop or teleport.');
+    showHint('VR mode ready. Trigger interacts/drags. Grip spawns a cube where you point.');
   }catch(err){
     vrBtn.textContent='ENTER VR';
-    showHint('VR session could not start. On Quest, allow WebXR and enter from the browser.');
+    showHint('VR session could not start. On laptop, make the emulator active and press its play button after entering VR.');
   }
 }
 
 document.getElementById('enter').addEventListener('click',()=>startGame());
 document.getElementById('vrBtn').addEventListener('click',enterVR);
-
-if(navigator.xr&&navigator.xr.isSessionSupported){
-  navigator.xr.isSessionSupported('immersive-vr').then(ok=>{
-    document.getElementById('vrBtn').disabled=!ok;
-  }).catch(()=>{});
-}
 
 renderer.xr.addEventListener('sessionstart',()=>{
   exitGamePointerLock();
