@@ -111,7 +111,7 @@ canvas{display:block;position:fixed;inset:0;}
   <div class="rules">
     <span>SKULL OF MORGATH</span> — the iron chest needs a rusty key<br>
     <span>AMULET OF BAEL</span> — the wardrobe opens only to the mirror runes<br>
-    <span>TOME OF SHADOWS</span> — the desk drawer answers to a marked book<br><br>
+    <span>TOME OF SHADOWS</span> — the desk compartment answers to a floor lever<br><br>
     Find them. Place them on the altar in the correct order.<br>
     The altar engravings show you what goes where.
   </div>
@@ -1395,7 +1395,7 @@ chestKey.rotation.set(.1,Math.PI/2,-.25);
 scene.add(chestKey);
 const keyGlow=new THREE.PointLight(0xffaa44,1.5,1.3);keyGlow.position.set(-4.0,1.8,1.72);scene.add(keyGlow);
 
-// Marked book lever — pull it to release the desk drawer lock
+// Retired hidden book prop. The visible floor lever below now releases the desk compartment.
 const hiddenBook=G();hiddenBook.userData={isBookLever:true};
 (()=>{
   const cover=BX(.13,.48,.34,LB({color:0x2a0600,emissive:new THREE.Color(.09,0,0)}));
@@ -1412,7 +1412,43 @@ const hiddenBook=G();hiddenBook.userData={isBookLever:true};
 hiddenBook.position.set(-4.18,1.78,-1.52);
 hiddenBook.rotation.y=Math.PI/2;
 scene.add(hiddenBook);
-const bookGlow=new THREE.PointLight(0xff2200,1.1,1.1);bookGlow.position.set(-4.0,1.85,-1.52);scene.add(bookGlow);
+hiddenBook.visible=false;
+const bookGlow=new THREE.PointLight(0xff2200,1.1,1.1);bookGlow.position.set(3.08,.45,1.35);scene.add(bookGlow);
+
+// Physical floor lever — releases the desk/book compartment.
+const floorLever=G();floorLever.userData={isBookLever:true};
+let floorLeverHandle=null;
+(()=>{
+  const baseM=LB({color:0x1b1510});
+  const ironDark=LB({color:0x171717,emissive:new THREE.Color(.01,.005,.002)});
+  const ironEdge=LB({color:0x5b4a32,emissive:new THREE.Color(.03,.018,0)});
+  const glowM=LB({color:0x8a1200,emissive:new THREE.Color(.45,.03,0)});
+  const base=BX(.62,.09,.44,baseM);base.position.y=.045;floorLever.add(base);
+  const plate=BX(.52,.035,.34,ironDark);plate.position.y=.105;floorLever.add(plate);
+  const slot=BX(.12,.02,.31,BA({color:0x050202}));slot.position.set(0,.128,0);floorLever.add(slot);
+  const pivot=CY(.065,.065,.18,12,ironEdge);pivot.rotation.z=Math.PI/2;pivot.position.set(0,.2,.08);floorLever.add(pivot);
+  const handle=G();floorLeverHandle=handle;
+  const stem=CY(.032,.04,.62,12,ironEdge);stem.position.y=.31;handle.add(stem);
+  const grip=CY(.08,.08,.16,12,glowM);grip.rotation.x=Math.PI/2;grip.position.y=.64;handle.add(grip);
+  const cap=SP(.09,10,glowM);cap.scale.set(1,.72,1);cap.position.y=.72;handle.add(cap);
+  handle.position.set(0,.2,.08);
+  handle.rotation.x=.62;
+  floorLever.add(handle);
+  const labelT=mkc(220,70,(x,w,h)=>{
+    x.clearRect(0,0,w,h);
+    x.fillStyle='#b88a28';x.fillRect(0,0,w,h);
+    x.strokeStyle='#2a1004';x.lineWidth=4;x.strokeRect(4,4,w-8,h-8);
+    x.fillStyle='#1a0600';x.font='bold 13px Georgia,serif';x.textAlign='center';
+    x.fillText('PULL TO RELEASE',w/2,27);
+    x.fillText('THE BOOK COMPARTMENT',w/2,49);
+  });
+  const label=new THREE.Mesh(new THREE.PlaneGeometry(.55,.18),BA({map:labelT,side:THREE.DoubleSide}));
+  label.rotation.x=-Math.PI/2;label.position.set(0,.132,-.36);floorLever.add(label);
+})();
+floorLever.position.set(3.08,0,1.35);
+floorLever.rotation.y=-.35;
+floorLever.traverse(c=>{if(c.isMesh)c.userData.isBookLever=true;});
+scene.add(floorLever);
 
 // ══════════════════════════════════════════════════════════════
 //  MIRROR  (right wall back)
@@ -1837,7 +1873,7 @@ function interactables(){
   wardGrp.traverse(c=>{if(c.userData.isRuneDisc)list.push(c);});
   deskGrp.traverse(c=>{if(c.userData.isDesk)list.push(c);});
   if(chestKey.visible)chestKey.traverse(c=>{if(c.isMesh)list.push(c);});
-  if(!S.bookPulled)hiddenBook.traverse(c=>{if(c.isMesh)list.push(c);});
+  if(!S.bookPulled)floorLever.traverse(c=>{if(c.isMesh)list.push(c);});
   altar.traverse(c=>{if(c.userData.isSlot)list.push(c);});
   list.push(altarTopMesh);
   spawnedObjects.forEach(o=>{if(o.parent)list.push(o);});
@@ -1981,7 +2017,7 @@ function handleClick(){
 
   // Check relics first
   if(chestKey.visible&&cam.position.distanceTo(chestKey.position)<reach){pickUpChestKey();return;}
-  if(!S.bookPulled&&cam.position.distanceTo(hiddenBook.position)<reach+.4){pullBookLever();return;}
+  if(!S.bookPulled&&cam.position.distanceTo(floorLever.position)<reach+.4){pullBookLever();return;}
   const relics=[skullRelic,amuletRelic,tomeRelic];
   for(const r of relics){
     if(!isRelicPickable(r))continue;
@@ -2033,13 +2069,69 @@ function makeControllerRay(){
   return line;
 }
 
+function buildVrSkeletonHand(isRight){
+  const hand=G();
+  const boneM=LB({color:0xd8c99d,emissive:new THREE.Color(.035,.025,.01)});
+  const jointM=LB({color:0x8a764e,emissive:new THREE.Color(.015,.01,0)});
+  const wrapM=LB({color:0x26140a});
+  const wrist=CY(.035,.043,.18,8,boneM);wrist.rotation.x=Math.PI/2;wrist.position.set(0,-.01,.07);hand.add(wrist);
+  const palm=BX(.16,.055,.12,boneM);palm.position.set(0,0,-.03);hand.add(palm);
+  const wrap=BX(.17,.018,.13,wrapM);wrap.position.set(0,-.035,-.025);hand.add(wrap);
+  const knuckles=[];
+  const fingerGroups=[];
+  const sign=isRight?1:-1;
+  const fingers=[
+    {x:sign*.062,len:[.075,.058,.045],spread:sign*.12},
+    {x:sign*.022,len:[.086,.068,.052],spread:sign*.04},
+    {x:sign*-.018,len:[.078,.06,.046],spread:sign*-.035},
+    {x:sign*-.055,len:[.062,.048,.038],spread:sign*-.1},
+  ];
+  fingers.forEach((fd,fi)=>{
+    const fg=G();fg.position.set(fd.x,.012,-.095);fg.rotation.y=fd.spread;hand.add(fg);
+    fingerGroups.push(fg);
+    let z=0;
+    fd.len.forEach((len,si)=>{
+      const seg=CY(.011*(1-si*.14),.013*(1-si*.14),len,7,boneM);
+      seg.rotation.x=Math.PI/2;seg.position.z=z-len/2;fg.add(seg);
+      const joint=SP(.017*(1-si*.08),6,jointM);joint.position.z=z;fg.add(joint);
+      z-=len;
+    });
+    const tip=SP(.014,6,boneM);tip.position.z=z;fg.add(tip);
+    knuckles.push(fg);
+  });
+  const thumb=G();thumb.position.set(sign*.085,-.005,-.04);thumb.rotation.set(.28,sign*-.82,sign*.25);hand.add(thumb);
+  [.06,.048].forEach((len,i)=>{
+    const seg=CY(.012,.014,len,7,boneM);seg.rotation.x=Math.PI/2;seg.position.z=-i*.055-len/2;thumb.add(seg);
+    const joint=SP(.018,6,jointM);joint.position.z=-i*.055;thumb.add(joint);
+  });
+  const thumbTip=SP(.015,6,boneM);thumbTip.position.z=-.115;thumb.add(thumbTip);
+  hand.userData={fingerGroups,thumb,isRight};
+  hand.position.set(isRight ? .038 : -.038,-.035,-.09);
+  hand.rotation.set(-.2,isRight?-.12:.12,0);
+  return hand;
+}
+
+function setVrHandGrip(controller,on){
+  const hand=controller.userData.skeletonHand;
+  if(!hand)return;
+  const curl=on ? .72 : .12;
+  hand.userData.fingerGroups.forEach((fg,i)=>{fg.rotation.x=curl+i*.035;});
+  hand.userData.thumb.rotation.x=on ? .58 : .28;
+}
+
 function setupController(idx){
   const controller=renderer.xr.getController(idx);
   controller.userData.index=idx;
+  controller.visible=false;
   controller.add(makeControllerRay());
-  controller.addEventListener('selectstart',()=>handleControllerSelect(controller));
-  controller.addEventListener('selectend',()=>handleControllerSelectEnd(controller));
-  controller.addEventListener('squeezestart',()=>handleControllerSqueeze(controller));
+  const skeletonHand=buildVrSkeletonHand(idx===1);
+  skeletonHand.visible=false;
+  controller.userData.skeletonHand=skeletonHand;
+  controller.add(skeletonHand);
+  controller.addEventListener('selectstart',()=>{setVrHandGrip(controller,true);handleControllerSelect(controller);});
+  controller.addEventListener('selectend',()=>{setVrHandGrip(controller,false);handleControllerSelectEnd(controller);});
+  controller.addEventListener('squeezestart',()=>{setVrHandGrip(controller,true);handleControllerSqueeze(controller);});
+  controller.addEventListener('squeezeend',()=>setVrHandGrip(controller,false));
   playerRig.add(controller);
   controllers.push(controller);
 }
@@ -2100,7 +2192,7 @@ function handleControllerSelect(controller){
 
   const reach=.75;
   if(chestKey.visible&&vrRayOrigin.distanceTo(chestKey.position)<reach){pickUpChestKey();return;}
-  if(!S.bookPulled&&vrRayOrigin.distanceTo(hiddenBook.position)<reach+.25){pullBookLever();return;}
+  if(!S.bookPulled&&vrRayOrigin.distanceTo(floorLever.position)<reach+.25){pullBookLever();return;}
   for(const r of [skullRelic,amuletRelic,tomeRelic]){
     if(isRelicPickable(r)&&vrRayOrigin.distanceTo(r.position)<reach){
       pickUp(r);heldByController=controller;return;
@@ -2201,16 +2293,17 @@ function cycleWardRune(obj){
 
 function pullBookLever(){
   if(S.bookPulled)return;
-  S.bookPulled=true;hiddenBook.userData.pulled=true;bookGlow.intensity=0;
-  let pull=0;const startX=hiddenBook.position.x;
+  S.bookPulled=true;floorLever.userData.pulled=true;bookGlow.intensity=0;
+  let pull=0;const startRot=floorLeverHandle.rotation.x;
   const iv=setInterval(()=>{
-    pull+=.025;hiddenBook.position.x=startX+Math.min(pull,.18);
-    hiddenBook.rotation.z=-Math.min(pull*1.7,.28);
-    if(pull>=.18)clearInterval(iv);
+    pull+=.04;
+    floorLeverHandle.rotation.x=startRot-Math.min(pull,1.05);
+    floorLeverHandle.position.z=.08-Math.min(pull*.04,.04);
+    if(pull>=1.05)clearInterval(iv);
   },16);
   playCreak();
-  showHint('A mechanism clicks inside the desk. The drawer can now be opened.');
-  showPopup('MARKED BOOK PULLED<br><small style="color:#777;font-size:.78em">The desk lock releases</small>');
+  showHint('The floor lever slams down. A mechanism clicks inside the desk compartment.');
+  showPopup('FLOOR LEVER PULLED<br><small style="color:#777;font-size:.78em">The book compartment releases</small>');
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2258,8 +2351,8 @@ function openWardrobe(){
 function openDesk(){
   if(S.deskOpen)return;
   if(!S.bookPulled){
-    showHint('The desk drawer is sealed. Pull the glowing marked book on the bookshelf.');
-    showPopup('SEALED DRAWER<br><small style="color:#777;font-size:.78em">A book lever unlocks it</small>');
+    showHint('The desk compartment is sealed. Pull the glowing floor lever near the desk.');
+    showPopup('SEALED COMPARTMENT<br><small style="color:#777;font-size:.78em">A floor lever unlocks it</small>');
     return;
   }
   S.deskOpen=true;playCreak();
@@ -2375,6 +2468,7 @@ function godMode(){
   S.hasChestKey=true;chestKey.visible=false;keyGlow.intensity=0;
   S.wardSolved=true;refreshAllWardRunes();
   S.bookPulled=true;bookGlow.intensity=0;
+  if(floorLeverHandle)floorLeverHandle.rotation.x=-.43;
   const ids=['skull','amulet','tome'];
   const rm={skull:skullRelic,amulet:amuletRelic,tome:tomeRelic};
   let d=0;
@@ -2444,7 +2538,7 @@ function checkHover(){
   const reach=2.5;
   if(!S.held){
     if(chestKey.visible&&cam.position.distanceTo(chestKey.position)<reach)lbl='[ CLICK ]  PICK UP RUSTY KEY';
-    else if(!S.bookPulled&&cam.position.distanceTo(hiddenBook.position)<reach+.4)lbl='[ CLICK ]  PULL MARKED BOOK';
+    else if(!S.bookPulled&&cam.position.distanceTo(floorLever.position)<reach+.4)lbl='[ CLICK ]  PULL FLOOR LEVER';
     if(!lbl)for(const r of [skullRelic,amuletRelic,tomeRelic]){
       if(isRelicPickable(r)&&cam.position.distanceTo(r.position)<reach){
         lbl='[ CLICK ]  PICK UP '+RELICS[r.userData.relicId].name.toUpperCase();break;
@@ -2453,7 +2547,7 @@ function checkHover(){
     if(!lbl){
       if(!S.chestOpen&&cam.position.distanceTo(chestGrp.position)<reach)lbl=S.hasChestKey?'[ CLICK ]  UNLOCK CHEST':'LOCKED CHEST — FIND KEY';
       else if(!S.wardOpen&&cam.position.distanceTo(wardGrp.position)<reach+0.5)lbl=S.wardSolved?'[ CLICK ]  OPEN WARDROBE':'RUNE LOCK — MATCH MIRROR CLUE';
-      else if(!S.deskOpen&&cam.position.distanceTo(deskGrp.position)<reach)lbl=S.bookPulled?'[ CLICK ]  OPEN DRAWER':'SEALED DRAWER — PULL MARKED BOOK';
+      else if(!S.deskOpen&&cam.position.distanceTo(deskGrp.position)<reach)lbl=S.bookPulled?'[ CLICK ]  OPEN DRAWER':'SEALED COMPARTMENT — PULL FLOOR LEVER';
     }
   }
   // Altar proximity when holding
@@ -2464,10 +2558,10 @@ function checkHover(){
     const obj=hits[0].object;
     if(hasAnc(obj,'isChestKey'))lbl='[ CLICK ]  PICK UP RUSTY KEY';
     else if(hasAnc(obj,'isRuneDisc'))lbl=S.wardSolved?'WARDROBE SEAL UNLOCKED':'[ CLICK ]  ROTATE RUNE';
-    else if(hasAnc(obj,'isBookLever'))lbl=S.bookPulled?'Book lever pulled':'[ CLICK ]  PULL MARKED BOOK';
+    else if(hasAnc(obj,'isBookLever'))lbl=S.bookPulled?'Floor lever pulled':'[ CLICK ]  PULL FLOOR LEVER';
     else if(hasAnc(obj,'isChest'))lbl=S.chestOpen?'Chest is open':(S.hasChestKey?'[ CLICK ]  UNLOCK CHEST':'LOCKED CHEST — FIND KEY');
     else if(hasAnc(obj,'isWardrobe'))lbl=S.wardOpen?'Wardrobe is open':(S.wardSolved?'[ CLICK ]  OPEN WARDROBE':'RUNE LOCK — MATCH MIRROR CLUE');
-    else if(hasAnc(obj,'isDesk'))lbl=S.deskOpen?'Drawer is open':(S.bookPulled?'[ CLICK ]  OPEN DRAWER':'SEALED DRAWER — PULL MARKED BOOK');
+    else if(hasAnc(obj,'isDesk'))lbl=S.deskOpen?'Drawer is open':(S.bookPulled?'[ CLICK ]  OPEN DRAWER':'SEALED COMPARTMENT — PULL FLOOR LEVER');
     else if(relicParent(obj)){const rp=relicParent(obj);lbl='[ CLICK ]  PICK UP '+RELICS[rp.userData.relicId].name.toUpperCase();}
     else if(obj.userData.isSlot||obj===altarTopMesh)lbl=S.held?'[ CLICK ]  PLACE ON ALTAR':'Approach the altar';
     else if(obj.userData.isKeypad)lbl=KP.unlocked?'UNLOCKED':'[ CLICK ]  ENTER CODE — 4 DIGITS';
@@ -2872,7 +2966,7 @@ function startGame(opts={}){
   if(!opts.vr)requestGamePointerLock();
   startRenderLoop();
   startTimer();
-  setTimeout(()=>showHint('The chamber seals. Find the key, match the wardrobe runes, and pull the marked book. Then place all 3 relics into their altar molds.'),900);
+  setTimeout(()=>showHint('The chamber seals. Find the key, match the wardrobe runes, and pull the floor lever. Then place all 3 relics into their altar molds.'),900);
 }
 
 async function enterVR(){
@@ -2909,11 +3003,19 @@ document.getElementById('vrBtn').addEventListener('click',enterVR);
 
 renderer.xr.addEventListener('sessionstart',()=>{
   exitGamePointerLock();
+  controllers.forEach(c=>{
+    c.visible=true;
+    if(c.userData.skeletonHand)c.userData.skeletonHand.visible=true;
+  });
   document.getElementById('vrBtn').textContent='IN VR';
 });
 renderer.xr.addEventListener('sessionend',()=>{
   document.getElementById('vrBtn').textContent='ENTER VR';
   heldByController=null;
+  controllers.forEach(c=>{
+    c.visible=false;
+    if(c.userData.skeletonHand)c.userData.skeletonHand.visible=false;
+  });
 });
 </script>
 </body>
